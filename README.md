@@ -2,11 +2,11 @@
 
 Nine ways to flatten the Earth, for How To Speak Data.
 
-Every flat map is a globe that has been cut, stretched or squeezed. Pick a
-projection and watch the sphere unfold into it, drag the slider to stop
-halfway, or switch to **Show grid** to see all nine side by side. Hover a
-country in the grid and it lights up in every projection, and the size test
-on the right reports how each map treats it.
+Every flat map is a globe that has been cut, stretched or squeezed. The page
+opens on all nine projections side by side. Hover a region and it lights up on
+every map, while the chart on the right shows its share of the world's land on
+each one against its true share on the globe. Click **Unfold** on any map to
+watch the globe turn into it in the single view.
 
 ## Running it
 
@@ -29,8 +29,7 @@ Any static host works for deployment — copy everything except `tools/`.
 index.html                 page markup: toolbar, map stage, grid, info panel
 app.css                    styles, with light and dark themes as CSS variables
 src/main.js                projections, the globe-to-map morph, grid view and readout
-data/land.js               GEO: land, Africa and Greenland outlines (single view, size test)
-data/countries-110m.js     WORLD: Natural Earth 1:110m countries as TopoJSON (grid view)
+data/countries-110m.js     WORLD: Natural Earth 1:110m countries as TopoJSON
 tools/serve.mjs            zero-dependency static server used by run.bat
 ```
 
@@ -51,15 +50,24 @@ and the finished map (`buildProjection`). The clip circle widens from 90° to
 Homolosine has a second stage that blends the uninterrupted map into the
 interrupted one.
 
+### Regions
+
+`REGION_MEMBERS` in `src/main.js` sorts every country into ten regions: North
+America (with Central America and the Caribbean), Greenland, South America,
+Antarctica (with the French Southern Lands), Europe, Africa, Southeast Asia,
+Russia, Australasia (with the Pacific islands), and "Middle East to Japan",
+which collects every country not named elsewhere. France's shape includes French
+Guiana, so that piece is split off into South America.
+
 ### The grid
 
-The grid draws all nine as SVG, with one `<path>` per country so hover can
-highlight the same country in every cell. While the grid is morphing it swaps
-in a thinned land outline (`LITE`) to keep the frame rate up; the per-country
-paths are cached once the maps come to rest.
+The grid draws all nine finished maps as SVG, one `<path>` per region, so a
+hovered region can be highlighted on every map at once. Clicking a region pins
+it; the Region dropdown does the same without a mouse.
 
-### The size test
+### The size chart
 
-Greenland against Africa by default, or whichever country is hovered in the
-grid. It compares the true area ratio on the sphere (`d3.geoArea`) with the
-projected area ratio on the current map.
+For the highlighted region, each row is its share of all the land drawn on that
+map; the Globe row (`d3.geoArea`) is the true share, repeated as a dashed line.
+Equal-area projections land on the line. The row for the projection under the
+mouse is marked. Shares are measured once per projection and cached.

@@ -100,11 +100,65 @@
   const PROP_NAME = { conformal: "Conformal", equal: "Equal-area", compromise: "Compromise", equidistant: "Equidistant" };
   const SURFACE_VERB = { cylinder: "Unrolling onto a cylinder", oval: "Stretching into an oval", cone: "Unrolling onto a cone", plane: "Peeling onto a flat plane" };
 
+  /* ---------- Regions ---------- */
+  // Ten regions that between them cover every country in the dataset
+  const REGION_MEMBERS = {
+    na: ["Canada", "United States of America", "Mexico", "Guatemala", "Belize", "Honduras", "El Salvador", "Nicaragua", "Costa Rica", "Panama",
+      "Cuba", "Bahamas", "Jamaica", "Haiti", "Dominican Rep.", "Puerto Rico", "Trinidad and Tobago"],
+    greenland: ["Greenland"],
+    sa: ["Colombia", "Venezuela", "Guyana", "Suriname", "Ecuador", "Peru", "Brazil", "Bolivia", "Paraguay", "Chile", "Argentina", "Uruguay", "Falkland Is."],
+    antarctica: ["Antarctica", "Fr. S. Antarctic Lands"],
+    europe: ["Iceland", "Norway", "Sweden", "Finland", "Denmark", "United Kingdom", "Ireland", "Netherlands", "Belgium", "Luxembourg", "France", "Germany",
+      "Switzerland", "Austria", "Italy", "Spain", "Portugal", "Poland", "Czechia", "Slovakia", "Hungary", "Slovenia", "Croatia", "Bosnia and Herz.",
+      "Serbia", "Montenegro", "Kosovo", "Albania", "Macedonia", "Greece", "Bulgaria", "Romania", "Moldova", "Ukraine", "Belarus", "Lithuania", "Latvia", "Estonia"],
+    africa: ["Morocco", "W. Sahara", "Algeria", "Tunisia", "Libya", "Egypt", "Mauritania", "Mali", "Niger", "Chad", "Sudan", "S. Sudan", "Eritrea", "Djibouti",
+      "Ethiopia", "Somalia", "Somaliland", "Senegal", "Gambia", "Guinea-Bissau", "Guinea", "Sierra Leone", "Liberia", "Côte d'Ivoire", "Burkina Faso",
+      "Ghana", "Togo", "Benin", "Nigeria", "Cameroon", "Central African Rep.", "Eq. Guinea", "Gabon", "Congo", "Dem. Rep. Congo", "Uganda", "Kenya",
+      "Rwanda", "Burundi", "Tanzania", "Angola", "Zambia", "Malawi", "Mozambique", "Zimbabwe", "Botswana", "Namibia", "South Africa", "Lesotho",
+      "eSwatini", "Madagascar"],
+    sea: ["Myanmar", "Thailand", "Laos", "Cambodia", "Vietnam", "Malaysia", "Brunei", "Indonesia", "Philippines", "Timor-Leste"],
+    russia: ["Russia"],
+    asia: null,   // everything not named elsewhere: the Middle East, Central, South and East Asia
+    australasia: ["Australia", "New Zealand", "Papua New Guinea", "Solomon Is.", "Vanuatu", "New Caledonia", "Fiji"]
+  };
+  const REGION_NAMES = {
+    na: "North America", greenland: "Greenland", sa: "South America", antarctica: "Antarctica", europe: "Europe",
+    africa: "Africa", sea: "Southeast Asia", russia: "Russia", asia: "Middle East to Japan", australasia: "Australasia"
+  };
+  const COUNTRY_GEOMS = WORLD.objects.countries.geometries;
+  const regionOf = {};
+  for (const [k, names] of Object.entries(REGION_MEMBERS)) if (names) names.forEach(n => regionOf[n] = k);
+  const pieces = Object.fromEntries(Object.keys(REGION_MEMBERS).map(k => [k, []]));
+  for (const g of COUNTRY_GEOMS) {
+    const k = regionOf[g.properties.name] || "asia";
+    if (g.properties.name === "France") {
+      // France's shape includes French Guiana, which belongs with South America
+      for (const arcs of g.arcs) {
+        const part = { type: "Polygon", arcs };
+        const [lon] = d3.geoCentroid(topojson.feature(WORLD, part));
+        pieces[lon < -20 ? "sa" : "europe"].push(part);
+      }
+    } else pieces[k].push(g);
+  }
+  const REGIONS = Object.keys(REGION_MEMBERS).map(key => ({ key, name: REGION_NAMES[key], geo: topojson.merge(WORLD, pieces[key]) }));
+  const regionByKey = Object.fromEntries(REGIONS.map(r => [r.key, r]));
+  const LAND = topojson.merge(WORLD, COUNTRY_GEOMS);
+  const BORDERS = topojson.mesh(WORLD, WORLD.objects.countries, (a, b) => a !== b);
+  const LAND_AREA = d3.sum(REGIONS, r => d3.geoArea(r.geo));
+  REGIONS.forEach(r => r.trueShare = d3.geoArea(r.geo) / LAND_AREA);
+
+  let pinned = regionByKey.greenland;   // the region shown when nothing is hovered
+  let hoverRegion = null;
+  const subject = () => hoverRegion || pinned;
+
   /* ---------- Projection select + detail ---------- */
   const projSel = document.getElementById("projSel");
   const selDot = document.getElementById("selDot");
   const groups = [...new Set(PROJ.map(p => p.group))];
   projSel.innerHTML = groups.map(g => `<optgroup label="${g}">${PROJ.filter(p => p.group === g).map(p => `<option value="${p.key}">${p.name}</option>`).join("")}</optgroup>`).join("");
+  const regionSel = document.getElementById("regionSel");
+  regionSel.innerHTML = REGIONS.map(r => `<option value="${r.key}">${r.name}</option>`).join("");
+  regionSel.value = pinned.key;
   document.getElementById("legend").innerHTML = Object.entries(PROP_NAME).map(([k, v]) => `<span class="p-${k}"><span class="dot"></span>${v}</span>`).join("");
 
   const detail = document.getElementById("detail");
@@ -132,7 +186,7 @@
   let colors = {};
   function readColors() {
     const cs = getComputedStyle(document.documentElement);
-    for (const k of ["ocean", "land", "grat", "accent", "africa", "tissot", "ink", "muted", "shade", "surface"]) colors[k] = cs.getPropertyValue("--" + k).trim();
+    for (const k of ["ocean", "land", "grat", "hl", "tissot", "ink", "muted", "shade", "surface"]) colors[k] = cs.getPropertyValue("--" + k).trim();
     dirty = true;
   }
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
@@ -176,13 +230,13 @@
 
   /* ---------- State ---------- */
   let cur = byKey.mercator;
-  let u = 0;                 // 0 = globe, 1 = finished map
+  let u = 0;                 // single view: 0 = globe, 1 = finished map (the grid always shows finished maps)
   let rot = [-20, -18, 0];   // current globe rotation (single view)
   let dirty = true;
   let spinning = !reduceMotion;
   let dragging = false;
   let busy = false;          // a scripted transition is running
-  let view = "single";
+  let view = "grid";
   const CARVE_AT = 0.68;
 
   function splitU(p, v) {
@@ -213,11 +267,10 @@
   /* ---------- Layers ---------- */
   const graticule = d3.geoGraticule().step([15, 15])();
   const tissot = { type: "GeometryCollection", geometries: [] };
-  function tissotCenters() { const out = []; for (let lat = -60; lat <= 60; lat += 30) for (let lon = -165; lon < 180; lon += 30) out.push([lon, lat]); return out; }
-  tissotCenters().forEach(c => tissot.geometries.push(d3.geoCircle().center(c).radius(4.5).precision(4)()));
-  const lyr = { grat: true, tissot: true, size: true };
+  for (let lat = -60; lat <= 60; lat += 30) for (let lon = -165; lon < 180; lon += 30)
+    tissot.geometries.push(d3.geoCircle().center([lon, lat]).radius(4.5).precision(4)());
+  const lyr = { grat: true, tissot: true };
   const SPHERE = { type: "Sphere" };
-  const TRUE_RATIO = d3.geoArea(GEO.africa) / d3.geoArea(GEO.greenland);
 
   function draw() {
     const p = cur;
@@ -234,12 +287,9 @@
       ctx.beginPath(); path(graticule);
       ctx.strokeStyle = colors.grat; ctx.lineWidth = 0.8; ctx.stroke();
     }
-    ctx.beginPath(); path(GEO.land); ctx.fillStyle = colors.land; ctx.fill();
+    ctx.beginPath(); path(LAND); ctx.fillStyle = colors.land; ctx.fill();
+    ctx.beginPath(); path(pinned.geo); ctx.fillStyle = colors.hl; ctx.fill();
 
-    if (lyr.size) {
-      ctx.beginPath(); path(GEO.africa); ctx.fillStyle = colors.africa; ctx.fill();
-      ctx.beginPath(); path(GEO.greenland); ctx.fillStyle = colors.accent; ctx.fill();
-    }
     if (lyr.tissot) {
       ctx.beginPath(); path(tissot);
       ctx.globalAlpha = 0.55; ctx.fillStyle = colors.tissot; ctx.fill();
@@ -266,192 +316,171 @@
       ctx.strokeStyle = colors.ink; ctx.globalAlpha = 0.55; ctx.lineWidth = 1; ctx.stroke(); ctx.globalAlpha = 1;
     }
 
-    updateReadout(proj);
     updatePhase();
   }
 
   /* ---------- Grid of all nine ---------- */
   const GW = 480, GH = 300;
   const NS = "http://www.w3.org/2000/svg";
-  const COUNTRIES = topojson.feature(WORLD, WORLD.objects.countries).features;
-  const isAfrica = COUNTRIES.map(c => d3.geoContains(GEO.africa, d3.geoCentroid(c)));
-  // Lighter stand-ins (every third vertex, coarser circles) used only while the grid is morphing
-  const thin = geo => {
-    const ring = r => r.length < 13 ? r : [...r.filter((pt, i) => i % 3 === 0), r[r.length - 1]];
-    const poly = p => p.map(ring);
-    const g = geo.geometry || geo;
-    return { type: g.type, coordinates: g.type === "Polygon" ? poly(g.coordinates) : g.coordinates.map(poly) };
-  };
-  const LITE = {
-    land: { type: "GeometryCollection", geometries: GEO.land.features.map(thin) },
-    africa: thin(GEO.africa), greenland: thin(GEO.greenland),
-    grat: d3.geoGraticule().step([15, 15]).precision(7.5)(),
-    tissot: { type: "GeometryCollection", geometries: tissotCenters().map(c => d3.geoCircle().center(c).radius(4.5).precision(15)()) }
-  };
-  const gridview = document.getElementById("gridview");
   const gridEl = document.getElementById("grid");
+  const gridview = document.getElementById("gridview");
   const hoverName = document.getElementById("hoverName");
-  const gridPhase = document.getElementById("gridPhase");
-  const byCountry = COUNTRIES.map(() => []);   // country index -> its <path> in every cell
   const mk = (tag, cls, parent) => { const e = document.createElementNS(NS, tag); if (cls) e.setAttribute("class", cls); parent.appendChild(e); return e; };
 
   const cells = PROJ.map(p => {
     const el = document.createElement("div");
     el.className = "cell";
-    el.tabIndex = 0;
-    el.setAttribute("role", "button");
-    el.setAttribute("aria-label", `${p.name}: open in single view`);
-    el.innerHTML = `<div class="cell-head p-${p.prop}"><span class="dot"></span>${p.name}</div>`;
+    el.innerHTML = `<div class="cell-head p-${p.prop}"><span class="dot"></span><span class="nm">${p.name}</span>` +
+      `<button type="button" class="cell-open" aria-label="Unfold ${p.name} from the globe">Unfold ↗</button></div>`;
     const svg = document.createElementNS(NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${GW} ${GH}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", `World map, ${p.name} projection`);
     el.appendChild(svg);
     const sph = mk("path", "sph", svg), grat = mk("path", "grat", svg);
-    // While morphing, one merged land shape stands in for the 177 country paths
-    const moving = mk("g", null, svg);
-    const land = mk("path", "c", moving), af = mk("path", "c af", moving), gl = mk("path", "c gl", moving);
-    const g = mk("g", null, svg);
-    const cs = COUNTRIES.map((c, i) => {
-      const pe = mk("path", "c" + (isAfrica[i] ? " af" : "") + (c.properties.name === "Greenland" ? " gl" : ""), g);
-      pe.dataset.i = i;
-      byCountry[i].push(pe);
-      return pe;
-    });
+    const regs = REGIONS.map(r => { const pe = mk("path", "rg", svg); pe.dataset.r = r.key; return pe; });
+    const borders = mk("path", "borders", svg), edge = mk("path", "rg-edge", svg);
     const tis = mk("path", "tis", svg), out = mk("path", "out", svg);
     gridEl.appendChild(el);
-    return { p, el, sph, grat, cs, tis, out, moving, land, af, gl, g, cache: {}, shown: null };
+    return { p, el, sph, grat, regs, borders, edge, tis, out, path: null };
   });
 
+  // Every grid map is a finished map, so its projection never changes once built
+  function gridPath(c) {
+    return c.path ??= d3.geoPath(buildProjection(c.p, 1, c.p.rotate, GW, GH, 0)).digits(1);
+  }
   function drawGrid() {
-    // Country paths only change between the two rest states, so cache them there
-    const rest = u <= 0.001 ? "globe" : u >= 0.999 ? "map" : null;
     for (const c of cells) {
-      const proj = buildProjection(c.p, u, c.p.rotate, GW, GH, 0);
-      if (!rest) proj.precision(2);
-      const path = d3.geoPath(proj).digits(1);
-      const { peel } = splitU(c.p, u);
-      c.sph.setAttribute("d", path(SPHERE) || "");
-      c.grat.setAttribute("d", lyr.grat ? path(rest ? graticule : LITE.grat) || "" : "");
-      if (rest) {
-        if (c.shown !== rest) {
-          const ds = c.cache[rest] ??= COUNTRIES.map(f => path(f) || "");
-          c.cs.forEach((pe, i) => pe.setAttribute("d", ds[i]));
-          c.shown = rest;
-        }
-        c.g.style.display = ""; c.moving.style.display = "none";
-      } else {
-        c.land.setAttribute("d", path(LITE.land) || "");
-        c.af.setAttribute("d", lyr.size ? path(LITE.africa) || "" : "");
-        c.gl.setAttribute("d", lyr.size ? path(LITE.greenland) || "" : "");
-        c.g.style.display = "none"; c.moving.style.display = "";
+      const path = gridPath(c);
+      if (!c.drawn) {
+        c.sph.setAttribute("d", path(SPHERE) || "");
+        c.regs.forEach((pe, i) => pe.setAttribute("d", path(REGIONS[i].geo) || ""));
+        c.borders.setAttribute("d", path(BORDERS) || "");
+        c.out.setAttribute("d", path(SPHERE) || "");
+        c.drawn = true;
       }
-      c.tis.setAttribute("d", lyr.tissot ? path(rest ? tissot : LITE.tissot) || "" : "");
-      c.out.setAttribute("d", peel <= 0.001 || peel >= 0.999 ? path(SPHERE) || "" : "");
+      c.grat.setAttribute("d", lyr.grat ? (c.gratD ??= path(graticule) || "") : "");
+      c.tis.setAttribute("d", lyr.tissot ? (c.tisD ??= path(tissot) || "") : "");
     }
-    updateReadout(buildProjection(cur, u, cur.rotate, GW, GH, 0), rest ? 0.1 : 1);
-    updatePhase();
+    paintSubject();
+  }
+  function paintSubject() {
+    const s = subject();
+    for (const c of cells) {
+      c.regs.forEach(pe => pe.classList.toggle("hl", pe.dataset.r === s.key));
+      c.edge.setAttribute("d", c.regs.find(pe => pe.dataset.r === s.key).getAttribute("d") || "");
+    }
+    hoverName.textContent = s.name;
+    hoverName.classList.toggle("pinned", !hoverRegion);
   }
 
-  let hovered = -1;
-  function setHover(i) {
-    if (i === hovered) return;
-    if (hovered >= 0) byCountry[hovered].forEach(pe => pe.classList.remove("hl"));
-    hovered = i;
-    setSubject(i);
-    if (i >= 0) {
-      byCountry[i].forEach(pe => { pe.classList.add("hl"); pe.parentNode.appendChild(pe); });
-      hoverName.textContent = COUNTRIES[i].properties.name;
-      hoverName.classList.remove("empty");
-    } else {
-      hoverName.textContent = "Hover a country to find it in every projection";
-      hoverName.classList.add("empty");
-    }
-  }
   gridEl.addEventListener("pointerover", e => {
-    const pe = e.target.closest("path.c[data-i]");
-    const was = hovered, prevCur = cur;
-    setHover(pe ? +pe.dataset.i : -1);
+    const pe = e.target.closest("path.rg");
+    const r = pe ? regionByKey[pe.dataset.r] : null;
     const cell = e.target.closest(".cell");
-    if (cell && !touring) {
-      const p = cells.find(c => c.el === cell).p;
-      if (p !== cur) { cur = p; renderDetail(cur); }
-    }
-    if (hovered !== was || cur !== prevCur) refreshGridReadout();
+    if (cell) { const p = cells.find(c => c.el === cell).p; if (p !== cur) { cur = p; renderDetail(cur); } }
+    if (r !== hoverRegion) { hoverRegion = r; paintSubject(); }
+    renderChart();
   });
-  gridEl.addEventListener("pointerleave", () => { setHover(-1); refreshGridReadout(); });
-  const refreshGridReadout = () => { if (view === "grid") updateReadout(buildProjection(cur, u, cur.rotate, GW, GH, 0)); };
-  function openSingle(cell) {
-    stopTour();
-    cur = cells.find(c => c.el === cell).p;
-    renderDetail(cur);
-    rot = cur.rotate.slice();
-    setView("single");
+  gridEl.addEventListener("pointerleave", () => { hoverRegion = null; paintSubject(); renderChart(); });
+  gridEl.addEventListener("click", e => {
+    const open = e.target.closest(".cell-open");
+    if (open) { openSingle(cells.find(c => c.el === open.closest(".cell")).p); return; }
+    const pe = e.target.closest("path.rg");
+    if (pe) pinRegion(pe.dataset.r);
+  });
+  function pinRegion(key) {
+    pinned = regionByKey[key]; regionSel.value = key;
+    hoverRegion = null; paintSubject(); renderChart(); dirty = true;
   }
-  gridEl.addEventListener("click", e => { const cell = e.target.closest(".cell"); if (cell) openSingle(cell); });
-  gridEl.addEventListener("keydown", e => {
-    const cell = e.target.closest(".cell");
-    if (cell && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openSingle(cell); }
-  });
+  regionSel.addEventListener("change", () => pinRegion(regionSel.value));
+
+  function openSingle(p) {
+    stopTour();
+    setView("single");
+    if (p !== cur || u > 0.001) { u = 0; cur = p; renderDetail(cur); }
+    goTo(p.key);
+  }
 
   const stage = document.getElementById("stage");
+  const toolbar = document.getElementById("toolbar");
   const viewSingle = document.getElementById("viewSingle"), viewGrid = document.getElementById("viewGrid");
   function setView(v) {
+    if (v === "grid") stopTour();
     view = v;
+    toolbar.dataset.view = v;
     stage.hidden = v !== "single";
     gridview.hidden = v !== "grid";
     viewSingle.setAttribute("aria-pressed", String(v === "single"));
     viewGrid.setAttribute("aria-pressed", String(v === "grid"));
-    tourBtn.textContent = touring ? "Stop tour" : (v === "grid" ? "Tour the details" : "Tour all nine");
-    setHover(-1);
+    hoverRegion = null;
+    if (v === "grid") paintSubject();
+    renderChart();
     dirty = true;
   }
 
-  /* ---------- Size readout: Greenland by default, or the hovered country ---------- */
-  const barTrue = document.getElementById("barTrue"), barMap = document.getElementById("barMap");
-  const valTrue = document.getElementById("valTrue"), valMap = document.getElementById("valMap");
-  const readNote = document.getElementById("readNote"), readoutEl = document.getElementById("readout");
-  const subjTitle = document.getElementById("subjTitle"), subjKey = document.getElementById("subjKey");
-  const AFRICA_AREA = d3.geoArea(GEO.africa);
-  const GREENLAND = { name: "Greenland", geo: GEO.greenland, ratio: TRUE_RATIO };
-  let subject = GREENLAND;
-  const fmt = r => r < 10 ? r.toFixed(2) : r.toFixed(1);
-  // Country : Africa, written so neither side drops below 1
-  const pair = r => r >= 1 ? "1 : " + fmt(r) : fmt(1 / r) + " : 1";
-  function setSubject(i) {
-    if (i >= 0) {
-      const f = COUNTRIES[i];
-      subject = { name: f.properties.name, geo: f, ratio: AFRICA_AREA / d3.geoArea(f) };
-    } else subject = GREENLAND;
-    subjTitle.textContent = subjKey.textContent = subject.name;
-    readoutEl.classList.toggle("hovering", i >= 0);
-    barTrue.style.width = Math.min(100, 100 / subject.ratio).toFixed(2) + "%";
-    valTrue.textContent = pair(subject.ratio);
+  /* ---------- Size chart: every projection's share of land for one region ---------- */
+  const rowsEl = document.getElementById("rows");
+  const subjTitle = document.getElementById("subjTitle");
+  const callout = document.getElementById("callout");
+  const ROWS = [{ key: "globe", name: "Globe (true size)" }, ...PROJ];
+  rowsEl.innerHTML = ROWS.map(r => `
+    <div class="row${r.key === "globe" ? " globe" : ""}" data-key="${r.key}">
+      <span class="nm">${r.prop ? `<span class="dot p-${r.prop}"></span>` : ""}${r.name}</span>
+      <span class="trk"><span class="bar"></span><span class="ref"></span></span>
+      <span class="val"></span>
+    </div>`).join("");
+  const rowEls = Object.fromEntries([...rowsEl.children].map(el => [el.dataset.key, el]));
+
+  // Projected area of every region on each finished map, measured once per projection
+  const shareCache = {};
+  function shares(p) {
+    if (shareCache[p.key]) return shareCache[p.key];
+    const proj = buildProjection(p, 1, p.rotate, GW, GH, 0).precision(0.2).clipExtent(null);
+    const path = d3.geoPath(proj);
+    const areas = REGIONS.map(r => path.area(r.geo));
+    const total = d3.sum(areas);
+    return (shareCache[p.key] = Object.fromEntries(REGIONS.map((r, i) => [r.key, areas[i] / total])));
   }
-  setSubject(-1);
-  function updateReadout(proj, precision = 0.1) {
-    proj.precision(precision).clipExtent(null);   // finer sampling so equal-area maps read exactly
-    const area = d3.geoPath(proj);
-    const { name, geo, ratio: trueRatio } = subject;
-    const g = area.area(geo), a = area.area(GEO.africa);
-    const vs = trueRatio >= 1 ? `Africa is ${fmt(trueRatio)} times larger than ${name}.` : `${name} is ${fmt(1 / trueRatio)} times larger than Africa.`;
-    if (u < 0.02) {
-      barMap.style.width = "0%"; valMap.textContent = "—";
-      readNote.textContent = `${vs} Unfold a map to see how it treats that ratio.`;
-      return;
+  const pct = v => v >= 0.1 ? (v * 100).toFixed(0) + "%" : v >= 0.01 ? (v * 100).toFixed(1) + "%" : (v * 100).toFixed(2) + "%";
+  const times = x => "×" + (x >= 10 ? x.toFixed(0) : x.toFixed(2));
+
+  function indicated() {
+    if (view === "grid") return cur.key;
+    if (u <= 0.001) return "globe";
+    return u >= 0.999 ? cur.key : null;
+  }
+  let lastChart = "";
+  function renderChart() {
+    const s = subject(), on = indicated();
+    const sig = `${s.key}|${on}|${view}`;
+    if (sig === lastChart) return;
+    lastChart = sig;
+    subjTitle.textContent = s.name;
+    const vals = { globe: s.trueShare };
+    PROJ.forEach(p => vals[p.key] = shares(p)[s.key]);
+    const max = Math.max(...Object.values(vals));
+    for (const r of ROWS) {
+      const el = rowEls[r.key], v = vals[r.key];
+      el.querySelector(".bar").style.width = (100 * v / max).toFixed(2) + "%";
+      el.querySelector(".ref").style.left = (100 * s.trueShare / max).toFixed(2) + "%";
+      el.querySelector(".val").textContent = r.key === "globe" ? pct(v) : times(v / s.trueShare);
+      el.title = r.key === "globe"
+        ? `${s.name} is ${pct(v)} of the world's land`
+        : `${r.name}: ${pct(v)} of the land on the map, ${times(v / s.trueShare)} its true share`;
+      el.classList.toggle("on", r.key === on);
     }
-    if (!(g > 0 && a > 0.5)) { barMap.style.width = "0%"; valMap.textContent = "—"; return; }
-    const ratio = a / g;
-    barMap.style.width = Math.min(100, 100 / ratio).toFixed(2) + "%";
-    valMap.textContent = pair(ratio);
-    if (u > 0.98) {
-      const off = ratio / trueRatio;
-      const big = 1 / off;
-      readNote.textContent = (view === "grid" ? cur.name + ": " : "") + (Math.abs(off - 1) < 0.02
-        ? `Area is preserved. ${name} draws at its true size relative to Africa.`
-        : big > 1
-          ? `${name} draws ${big.toFixed(big < 1.1 ? 2 : 1)}× too large relative to Africa.`
-          : `${name} draws at ${Math.round(big * 100)}% of its true size relative to Africa.`);
+    if (on === "globe") {
+      callout.innerHTML = `On the globe, <b>${s.name}</b> is <b>${pct(s.trueShare)}</b> of the world's land.`;
+    } else if (on) {
+      const p = byKey[on], x = vals[on] / s.trueShare;
+      callout.innerHTML = Math.abs(x - 1) < 0.02
+        ? `<b>${p.name}</b> draws ${s.name} at its true size.`
+        : x > 1
+          ? `<b>${p.name}</b> draws ${s.name} <b>${times(x).slice(1)}×</b> too big.`
+          : `<b>${p.name}</b> draws ${s.name} at <b>${Math.round(x * 100)}%</b> of its true size.`;
     } else {
-      readNote.textContent = `${vs} Watch the bottom bar as the map forms.`;
+      callout.textContent = "Unfolding…";
     }
   }
 
@@ -465,10 +494,10 @@
     else if (peel < 1) txt = SURFACE_VERB[cur.surface];
     else txt = "Flat map";
     hudPhase.textContent = txt;
-    gridPhase.textContent = u <= 0.001 ? "Globes" : u >= 0.999 ? "Flat maps" : "Unfolding…";
     hudHint.hidden = u > 0.001;
     playBtn.textContent = u >= 0.999 ? "Fold back" : "Unfold";
     if (!sliderActive) morph.value = Math.round(u * 1000);
+    renderChart();
   }
 
   /* ---------- Animation helpers ---------- */
@@ -501,13 +530,6 @@
   async function goTo(key) {
     const my = ++token;
     busy = true;
-    if (view === "grid") {
-      // All nine are already on screen: just focus this one and make sure they are unfolded
-      cur = byKey[key]; renderDetail(cur); rot = cur.rotate.slice(); dirty = true;
-      if (u < 0.999) await setU(1, 2000);
-      if (my === token) busy = false;
-      return;
-    }
     if (cur.key !== key && u > 0) await setU(0, 1300);
     if (my !== token) return;
     cur = byKey[key]; renderDetail(cur); dirty = true;
@@ -534,7 +556,7 @@
   morph.addEventListener("input", async () => {
     stopTour(); ++token; busy = false;
     const v = morph.value / 1000;
-    if (u === 0 && v > 0 && view === "single") {
+    if (u === 0 && v > 0) {
       // Line the globe up with this projection's center before it opens
       const my = ++token; busy = true;
       await rotateTo(cur.rotate, 450);
@@ -544,23 +566,16 @@
   });
   morph.addEventListener("change", () => { sliderActive = false; });
 
-  ["Grat", "Tissot", "Size"].forEach(n => {
+  ["Grat", "Tissot"].forEach(n => {
     const el = document.getElementById("lyr" + n);
-    el.addEventListener("change", () => {
-      lyr[n.toLowerCase()] = el.checked;
-      gridview.classList.toggle("show-size", lyr.size);
-      dirty = true;
-    });
+    el.addEventListener("change", () => { lyr[n.toLowerCase()] = el.checked; dirty = true; });
   });
 
+  viewGrid.addEventListener("click", () => setView("grid"));
   viewSingle.addEventListener("click", () => { if (u > 0.001) rot = cur.rotate.slice(); setView("single"); });
-  viewGrid.addEventListener("click", () => {
-    setView("grid");
-    if (u < 0.001 && !touring) { const my = ++token; busy = true; setU(1, 2000).then(() => { if (my === token) busy = false; }); }
-  });
 
   let touring = false;
-  function stopTour() { if (touring) { touring = false; tourBtn.setAttribute("aria-pressed", "false"); tourBtn.textContent = view === "grid" ? "Tour the details" : "Tour all nine"; } }
+  function stopTour() { if (touring) { touring = false; tourBtn.setAttribute("aria-pressed", "false"); tourBtn.textContent = "Tour all nine"; } }
   tourBtn.addEventListener("click", async () => {
     if (touring) { stopTour(); return; }
     touring = true; tourBtn.setAttribute("aria-pressed", "true"); tourBtn.textContent = "Stop tour";
@@ -569,7 +584,7 @@
     while (touring) {
       await goTo(PROJ[i].key);
       if (!touring) break;
-      await new Promise(r => setTimeout(r, (view === "grid" ? 4000 : 2600) * SPEED));
+      await new Promise(r => setTimeout(r, 2600 * SPEED));
       i = (i + 1) % PROJ.length;
     }
   });
@@ -603,8 +618,13 @@
   }
 
   // test hook
-  window.__proj = { set(key, v) { token++; busy = false; cur = byKey[key]; renderDetail(cur); rot = cur.rotate.slice(); u = v; spinning = false; dirty = true; }, view: setView, bench(v) { u = v; const t = performance.now(); drawGrid(); return performance.now() - t; } };
+  window.__proj = {
+    set(key, v) { token++; busy = false; cur = byKey[key]; renderDetail(cur); rot = cur.rotate.slice(); u = v; spinning = false; dirty = true; },
+    view: setView, pin: pinRegion,
+    shares: () => Object.fromEntries(REGIONS.map(r => [r.key, { true: r.trueShare, ...Object.fromEntries(PROJ.map(p => [p.key, shares(p)[r.key]])) }])),
+    regions: () => Object.fromEntries(Object.entries(pieces).map(([k, v]) => [k, v.map(g => g.properties ? g.properties.name : "France (part)")]))
+  };
 
-  readColors(); resize(); renderDetail(cur);
+  readColors(); resize(); renderDetail(cur); setView("grid");
   requestAnimationFrame(frame);
 })();
