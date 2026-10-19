@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Unfolding the Globe</title>
+<meta name="description" content="Nine ways to flatten the Earth: watch a globe unfold into each map projection, or compare all nine side by side.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Nine ways to flatten the Earth</p>
+      <h1>Unfolding the Globe</h1>
+    </div>
+    <p class="lede">Every flat map is a globe that has been cut, stretched or squeezed. Pick a projection and watch the sphere turn into it, drag the slider to stop halfway, or show all nine side by side.</p>
+  </header>
+
+  <div class="toolbar" role="toolbar" aria-label="Map controls">
+    <div class="tb-section">
+      <label class="tb-label" for="projSel">Projection</label>
+      <span class="select-wrap"><span class="dot" id="selDot"></span><select id="projSel"></select></span>
+    </div>
+    <div class="tb-divider"></div>
+    <div class="tb-section grow">
+      <button class="btn" id="playBtn" type="button">Unfold</button>
+      <div class="slider-block">
+        <input type="range" id="morph" min="0" max="1000" value="0" aria-label="Globe to map">
+        <div class="slider-ends"><span>Globe</span><span id="endLabel">Map</span></div>
+      </div>
+    </div>
+    <div class="tb-divider"></div>
+    <div class="tb-section">
+      <button class="btn ghost" id="tourBtn" type="button" aria-pressed="false">Tour all nine</button>
+    </div>
+    <div class="tb-divider"></div>
+    <div class="tb-section">
+      <span class="tb-label">View</span>
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" id="viewSingle" aria-pressed="true">Single</button>
+        <button type="button" id="viewGrid" aria-pressed="false">Show grid</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="layout">
+    <section class="stage-col" aria-label="Projection animation">
+      <div class="stage" id="stage">
+        <canvas id="map" role="img" aria-label="Animated world map"></canvas>
+        <div class="hud">
+          <div>
+            <div class="hud-name" id="hudName">Mercator</div>
+            <div class="hud-phase" id="hudPhase">Globe</div>
+          </div>
+          <div class="hud-hint" id="hudHint">Drag the globe to spin it</div>
+        </div>
+      </div>
+
+      <div class="gridview show-size" id="gridview" hidden>
+        <div class="grid-status">
+          <div class="hover-name empty" id="hoverName" aria-live="polite">Hover a country to find it in every projection</div>
+          <div class="phase" id="gridPhase">Flat map</div>
+        </div>
+        <div class="grid" id="grid"></div>
+      </div>
+
+      <div class="layers" role="group" aria-label="Map layers">
+        <label><input type="checkbox" id="lyrGrat" checked> Graticule (15°)</label>
+        <label><input type="checkbox" id="lyrTissot" checked> <span class="swatch" style="background: var(--tissot)"></span> Tissot's indicatrix</label>
+        <label><input type="checkbox" id="lyrSize" checked> <span class="swatch" style="background: var(--accent)"></span> Greenland vs <span class="swatch" style="background: var(--africa)"></span> Africa</label>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <article class="detail" id="detail" aria-live="polite"></article>
+
+      <section class="readout" id="readout">
+        <h3>The <span id="subjTitle">Greenland</span> test</h3>
+        <p id="readNote">Africa is 13.7 times larger than Greenland. Watch how each map treats that ratio.</p>
+        <div class="bars">
+          <span class="lbl">Globe</span>
+          <div class="track"><div class="fill" id="barTrue"></div></div>
+          <span class="val" id="valTrue">1 : 13.7</span>
+          <span class="lbl">This map</span>
+          <div class="track"><div class="fill" id="barMap"></div></div>
+          <span class="val" id="valMap">—</span>
+        </div>
+        <div class="bar-key"><span><span class="swatch" id="subjSwatch" style="background: var(--accent)"></span><span id="subjKey">Greenland</span></span><span><span class="swatch" style="background: color-mix(in srgb, var(--africa) 40%, transparent)"></span>Africa (full bar)</span></div>
+      </section>
+
+      <div class="legend" id="legend"></div>
+    </aside>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-geo-projection@4.0.0/dist/d3-geo-projection.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-geo-polygon@2.0.1/dist/d3-geo-polygon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="data/land.js"></script>
+<script src="data/countries-110m.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>

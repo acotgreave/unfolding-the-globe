@@ -1,0 +1,11 @@
+{
+  "name": "unfolding-the-globe",
+  "version": "1.0.0",
+  "description": "Nine ways to flatten the Earth: an interactive map projection explainer, from How To Speak Data.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node tools/serve.mjs"
+  },
+  "author": "Andy Cotgreave"
+}
